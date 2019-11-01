@@ -236,7 +236,7 @@ Resources:
               }, callback)
             }, callback)
           }
-      Runtime: nodejs6.10
+      Runtime: nodejs10
 
   #
   # Create the API Gateway
