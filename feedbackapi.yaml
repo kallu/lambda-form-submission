@@ -1,0 +1,227 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: Serverless contact form posting to Slack
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "API config"
+        Parameters:
+          - APIStage
+          - CustomDomain
+          - CustomCert
+      -
+        Label:
+          default: "reCAPTCHA config"
+        Parameters:
+          - ReCaptchaSecret
+      - Label:
+          default: "Slack integration"
+        Parameters:
+          - WebHook
+Parameters:
+  ReCaptchaSecret:
+     Type: String
+     Default: 'MY_CAPTCHA_SECRET'
+     Description: Your Google reCAPTCHA secret
+  WebHook:
+     Type: String
+     Default: 'https://hooks.slack.com/services/SLACK/CHANNEL/WEBHOOK'
+     Description: Webhook for posting to Slack channel
+  CustomDomain:
+     Type: String
+     Default: ''
+     Description: API will be called StackName.CustomDomain
+  CustomCert:
+     Type: String
+     Default: ''
+     Description: ACM certificate ARN for custom domain
+  APIStage:
+     Type: String
+     Default: 'prod'
+     Description: API stage name
+
+Conditions:
+  NoCustomName: !Equals [!Ref CustomDomain, "" ]
+  HasCustomName: !Not [!Equals [!Ref CustomDomain, "" ]]
+
+Resources:
+
+  ContactUsAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: ContactUs API
+      StageName: !Ref APIStage
+      OpenApiVersion: '2.0'
+      EndpointConfiguration: EDGE
+
+  GatewayDomain:
+    Type: AWS::ApiGateway::DomainName
+    Condition: HasCustomName
+    Properties:
+      DomainName: !Sub '${AWS::StackName}.${CustomDomain}'
+      CertificateArn: !Ref CustomCert
+      EndpointConfiguration:
+        Types: 
+          - 'EDGE'
+
+  BasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Condition: HasCustomName
+    DependsOn: [ ContactUsAPI ]
+    Properties:
+      BasePath: ''
+      DomainName: !Ref GatewayDomain
+      RestApiId: !Ref ContactUsAPI
+      Stage: !Ref ContactUsAPI.Stage
+
+  R53Record:
+    Condition: HasCustomName
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Type: A
+      AliasTarget:
+        HostedZoneId: !GetAtt GatewayDomain.DistributionHostedZoneId
+        DNSName: !GetAtt GatewayDomain.DistributionDomainName
+      Comment: !Sub '${AWS::StackName} API alias'
+      HostedZoneName: !Sub '${CustomDomain}.'
+      Name: !Sub '${AWS::StackName}.${CustomDomain}.'
+
+  LambdaFunctionLogGroup:
+    Type: "AWS::Logs::LogGroup"
+    DependsOn: "ContactUsFunction"
+    Properties: 
+      RetentionInDays: 30
+      LogGroupName: !Sub '/aws/lambda/${ContactUsFunction}'
+
+  ContactUsFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Runtime: nodejs10.x
+      Timeout: 6
+      Handler: index.handler
+      Description: Post to Slack
+      MemorySize: 128
+      Environment:
+        Variables:
+          RECAPTCHA_SECRET: !Ref ReCaptchaSecret
+          SLACK_WEBHOOK: !Ref WebHook
+      Events:
+        ContactUsAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ContactUsAPI
+            Path: '/'
+            Method: POST
+      InlineCode: |
+          var url = require('url')
+          var https = require('https')
+          var querystring = require('querystring')
+          var responseHeaders = {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Credentials': true
+          }
+
+          var googleApiRequest = function(captchaResponse, success, error) {
+            var postData = querystring.stringify({
+              'secret': process.env.RECAPTCHA_SECRET,
+              'response': captchaResponse
+            })
+
+            var options = {
+              hostname: 'www.google.com',
+              port: 443,
+              path: '/recaptcha/api/siteverify',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(postData)
+              }
+            }
+
+            var req = https.request(options, function(res) {
+              res.setEncoding('utf8')
+              res.on('data', function(chunk) {
+                var captchaResponse = JSON.parse(chunk)
+                if (captchaResponse.success) {
+                  success()
+                } else {
+                  error(null, {
+                    statusCode: '500',
+                    headers: responseHeaders,
+                    body: JSON.stringify({message: 'Invalid recaptcha'})
+                  })
+                }
+              })
+            })
+
+            req.on('error', function(e) {
+              error(null, {
+                statusCode: '500',
+                headers: responseHeaders,
+                body: JSON.stringify({message: e.message})
+              })
+            })
+
+            req.write(postData)
+            req.end()
+          }
+
+          exports.handler = function (event, context, callback) {
+            var inputData = JSON.parse(event.body)
+
+            googleApiRequest(inputData['g-recaptcha-response'], function() {
+              delete inputData['g-recaptcha-response']
+
+              // Call slack webhook to post the message
+              const name = inputData.name ? inputData.name : 'Anonymous'
+              const email = inputData.email ? `(${inputData.email})` : ''
+              const message = inputData.message ? inputData.message : ''
+              const postdata = JSON.stringify({
+                text: `From ${name} ${email}\n${message}`
+              })
+
+              const uri = url.parse(process.env.SLACK_WEBHOOK)
+              const options = {
+                protocol: uri.protocol,
+                hostname: uri.hostname,
+                port: uri.port,
+                path: uri.pathname,
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': postdata.length
+                }
+              }
+              const post = https.request(options, (res) => {
+                callback(null, {
+                  statusCode: res.statusCode,
+                  headers: responseHeaders,
+                  body: '{"success": true}'
+                })
+              })
+              post.on('error', (error) => { 
+                console.error(error)
+                callback(null, {
+                  statusCode: error.statusCode,
+                  headers: responseHeaders,
+                  body: '{"success": fail}'
+                })
+              })
+              post.write(postdata)
+              post.end()
+              
+            }, callback)
+          }
+
+Outputs:
+  ApiUrl:
+    Condition: NoCustomName
+    Description: URL of your API endpoint
+    Value: !Sub 'https://${ContactUsAPI}.execute-api.${AWS::Region}.amazonaws.com/${APIStage}/'
+  CustomUrl:
+    Condition: HasCustomName
+    Description: URL of your API endpoint
+    Value: !Sub 'https://${GatewayDomain}/'

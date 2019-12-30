@@ -1,0 +1,130 @@
+<html>
+
+<head>
+  <title>Feedback form with Lambda backend posting to Slack</title>
+</head>
+
+<body>
+  <style>
+    * {
+      font-family: Helvetica;
+      margin: 10 20 0 20;
+    }
+  </style>
+
+  <table style="border-collapse:collapse">
+    <tr style="background-color:white">
+      <td style="vertical-align:top">
+        <h3>Lorem ipsum</h3>
+        <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nec tamen ullo modo summum
+          pecudis bonum et hominis idem mihi videri potest. Nos paucis ad haec additis finem
+          faciamus aliquando; Videsne quam sit magna dissensio? Duo Reges:
+          constructio interrete. Quia dolori non voluptas contraria est, sed doloris privatio.
+          His enim rebus detractis negat se reperire in asotorum vita quod reprehendat.
+          Satis est tibi in te, satis in legibus, satis in mediocribus amicitiis praesidii.
+        </p>
+        <p>Your feedback and comments are most welcome.</p>
+        <style>
+          .feedback {
+            width: 90%;
+            padding: 8px;
+            outline: 1px solid #1c87c9;
+            resize: vertical;
+            height: auto;
+            font-size: 14px;
+          }
+
+          .form__button {
+            font-size: 14px;
+            padding: 20px;
+            border: none;
+            background: #1c87c9;
+            color: #fff;
+          }
+
+          .form__button:hover {
+            background: #2371a0;
+          }
+
+          .form__errors {
+            color: red
+          }
+        </style>
+        <form id="form">
+          <input class="feedback" type="text" id="name_input" name="name" placeholder="Your Name (optional)">
+          <br>
+          <input class="feedback" type="text" id="email_input" name="email" placeholder="YourEmail@Address (optional)">
+          <br>
+          <textarea class="feedback" type="textarea" id="message_input" name="message" placeholder="Your feedback ..."
+            rows="5"></textarea>
+          <p class="form__errors" style="display: none;">Please fill in the feedback.</p>
+          <p class="form__success" style="display: none;">Sent successfully!</p>
+          <p class="form__sending" style="display: none;">Sending...</p>
+          <button type="submit" class="g-recaptcha form__button" data-sitekey="__reCaptchaSitekey__"
+            data-callback="handleFormSubmit">Submit</button>
+        </form>
+      </td>
+    </tr>
+  </table>
+
+  <script src='https://www.google.com/recaptcha/api.js' async defer></script>
+  <script>
+    var handleFormSubmit = function () {
+      var formApiEndpoint = "https://URL/TO/YOUR/AWS/APIGW/"
+      var successEl = document.querySelector('.form__success')
+      var sendingEl = document.querySelector('.form__sending')
+      var errorsEl = document.querySelector('.form__errors')
+      var buttonEl = document.querySelector('.form__button')
+      var nameInput = document.querySelector('#name_input')
+      var emailInput = document.querySelector('#email_input')
+      var messageInput = document.querySelector('#message_input')
+      var recaptchaResponse = document.querySelector('#form textarea[name=\'g-recaptcha-response\']')
+
+      successEl.style.display = 'none'
+      errorsEl.style.display = 'none'
+
+      if (messageInput == '') {
+        errorsEl.style.display = 'block'
+        buttonEl.disabled = false
+        sendingEl.style.display = 'none'
+      } else {
+        var formRequest = new Request(formApiEndpoint, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: nameInput.value,
+            email: emailInput.value,
+            message: messageInput.value,
+            'g-recaptcha-response': recaptchaResponse.value
+          })
+        })
+
+        fetch(formRequest)
+          .then(function (response) {
+            if (response.status === 200) {
+              return response.json()
+            } else {
+              throw new Error('Something went wrong!')
+            }
+          })
+          .then(function (response) {
+            successEl.style.display = 'block'
+            buttonEl.disabled = false
+            sendingEl.style.display = 'none'
+          }).catch(function (error) {
+            errorsEl.style.display = 'block'
+            buttonEl.disabled = false
+            sendingEl.style.display = 'none'
+            console.error(error)
+          })
+      }
+    }
+
+    document.querySelector('.form__button').addEventListener('click', function () {
+      document.querySelector('.form__sending').style.display = 'block'
+      document.querySelector('.form__button').disabled = true
+      document.querySelector('.form__errors').style.display = 'none'
+    })
+  </script>
+</body>
+
+</html>
