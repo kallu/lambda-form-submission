@@ -99,7 +99,7 @@ Resources:
   ContactUsFunction:
     Type: 'AWS::Serverless::Function'
     Properties:
-      Runtime: nodejs10.x
+      Runtime: nodejs12.x
       Timeout: 6
       Handler: index.handler
       Description: Post to Slack
